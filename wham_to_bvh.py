@@ -117,6 +117,32 @@ def build_hierarchy(offsets):
     return "\n".join(lines) + "\n", dfs
 
 
+def _wrap180(deg):
+    """Wrap an angle (degrees) into (-180, 180]."""
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def _decompose_zxy_continuous(Rj, prev):
+    """
+    scipy's as_euler("ZXY") decomposition isn't unique: (z, x, y) and
+    (z+180, 180-x, y+180) represent the exact same rotation. Decomposing each
+    frame independently picks a branch arbitrarily, which makes the BVH
+    visibly "flip" a joint 180 degrees between two consecutive frames
+    whenever the solver lands on a different branch than the previous frame
+    (each frame's pose is individually correct, but the jump between frames
+    reads as a snap during playback). Pick whichever branch stays closest to
+    the previous frame's angles for this joint.
+    """
+    z, x, y = Rotation.from_matrix(Rj).as_euler("ZXY", degrees=True)
+    if prev is None:
+        return z, x, y
+    alt = (_wrap180(z + 180.0), 180.0 - x, _wrap180(y + 180.0))
+    primary = (z, x, y)
+    d_primary = sum(_wrap180(primary[k] - prev[k]) ** 2 for k in range(3))
+    d_alt = sum(_wrap180(alt[k] - prev[k]) ** 2 for k in range(3))
+    return primary if d_primary <= d_alt else alt
+
+
 def make_bvh(track, offsets, dfs, fps):
     pose = track["pose"]              # (N, 72) axis-angle
     trans = track["trans"]           # (N, 3)
@@ -124,6 +150,7 @@ def make_bvh(track, offsets, dfs, fps):
     hierarchy, _ = build_hierarchy(offsets)
 
     lines = [hierarchy, "MOTION", f"Frames: {N}", f"Frame Time: {1.0 / fps:.6f}"]
+    prev_angles = {}  # joint index -> (z, x, y) from the previous frame
     for i in range(N):
         vals = []
         # root translation (flip camera -> y-up) in cm
@@ -134,7 +161,8 @@ def make_bvh(track, offsets, dfs, fps):
             Rj = Rotation.from_rotvec(aa).as_matrix()
             if j == 0:
                 Rj = R_FLIP @ Rj  # orient whole body into y-up world
-            z, x, y = Rotation.from_matrix(Rj).as_euler("ZXY", degrees=True)
+            z, x, y = _decompose_zxy_continuous(Rj, prev_angles.get(j))
+            prev_angles[j] = (z, x, y)
             vals += [z, x, y]
         lines.append(" ".join(f"{v:.4f}" for v in vals))
     return "\n".join(lines) + "\n"

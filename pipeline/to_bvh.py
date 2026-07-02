@@ -92,6 +92,35 @@ def _axis_angle(axis: np.ndarray, angle: float) -> np.ndarray:
     ])
 
 
+def _continuous_swing(
+    rest: np.ndarray, target: np.ndarray,
+    prev: tuple[np.ndarray, np.ndarray] | None,
+) -> tuple[np.ndarray, tuple[np.ndarray, np.ndarray]]:
+    """
+    Minimal rotation taking `rest` to `target`, kept continuous across frames.
+
+    Computing this fresh from the fixed rest direction every frame is
+    numerically unstable whenever `target` swings near the antipodal point
+    (180 deg from rest) - the rotation axis there is cross(rest, target)
+    normalized, and near that point a tiny change in `target` swings that
+    axis wildly (it's genuinely undefined exactly at 180 deg), producing a
+    visibly erratic bone flip even though the keypoints move smoothly.
+    Instead, once we have a previous frame, we rotate incrementally: minimal
+    rotation from the PREVIOUS target direction to the CURRENT one, composed
+    onto the previous world rotation. Consecutive video frames move by a
+    small angle, so this almost never approaches the singularity (only the
+    very first frame, or a frame right after a detection gap, uses the
+    fixed-rest-direction formula directly).
+    """
+    target = _norm(target)
+    if prev is None:
+        R = _rot_between(rest, target)
+    else:
+        prev_target, prev_R = prev
+        R = _rot_between(prev_target, target) @ prev_R
+    return R, (target, R)
+
+
 def _basis(up: np.ndarray, right: np.ndarray) -> np.ndarray:
     """
     Full orthonormal world rotation from a rest frame (right=+X, up=+Y, fwd=+Z)
@@ -106,7 +135,10 @@ def _basis(up: np.ndarray, right: np.ndarray) -> np.ndarray:
     return np.column_stack([r, u, f])
 
 
-def _world_rotations(frame: list[dict]) -> dict[str, np.ndarray]:
+def _world_rotations(
+    frame: list[dict],
+    prev_swing: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+) -> tuple[dict[str, np.ndarray], np.ndarray, dict[str, tuple[np.ndarray, np.ndarray]]]:
     nose = _lm(frame, "nose")
     lsho, rsho = _lm(frame, "left_shoulder"), _lm(frame, "right_shoulder")
     lel, rel = _lm(frame, "left_elbow"), _lm(frame, "right_elbow")
@@ -118,31 +150,51 @@ def _world_rotations(frame: list[dict]) -> dict[str, np.ndarray]:
     mid_hip = (lhip + rhip) * 0.5
     mid_sho = (lsho + rsho) * 0.5
 
+    prev_swing = prev_swing or {}
+    new_swing: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+
+    def swing(name: str, rest: np.ndarray, target: np.ndarray) -> np.ndarray:
+        Rj, state = _continuous_swing(rest, target, prev_swing.get(name))
+        new_swing[name] = state
+        return Rj
+
     R = {}
     # Torso joints use a full basis so body turning is captured.
     R["Hips"] = _basis(up=mid_sho - mid_hip, right=rhip - lhip)
     R["Spine"] = _basis(up=nose - mid_sho, right=rsho - lsho)
-    R["Neck"] = _rot_between(_Y, nose - mid_sho)
+    R["Neck"] = swing("Neck", _Y, nose - mid_sho)
     # Limbs: swing from rest direction to current bone direction.
-    R["LeftArm"] = _rot_between(-_X, lel - lsho)
-    R["LeftForeArm"] = _rot_between(-_X, lwr - lel)
-    R["RightArm"] = _rot_between(_X, rel - rsho)
-    R["RightForeArm"] = _rot_between(_X, rwr - rel)
-    R["LeftUpLeg"] = _rot_between(-_Y, lkn - lhip)
-    R["LeftLeg"] = _rot_between(-_Y, lank - lkn)
-    R["RightUpLeg"] = _rot_between(-_Y, rkn - rhip)
-    R["RightLeg"] = _rot_between(-_Y, rank - rkn)
+    R["LeftArm"] = swing("LeftArm", -_X, lel - lsho)
+    R["LeftForeArm"] = swing("LeftForeArm", -_X, lwr - lel)
+    R["RightArm"] = swing("RightArm", _X, rel - rsho)
+    R["RightForeArm"] = swing("RightForeArm", _X, rwr - rel)
+    R["LeftUpLeg"] = swing("LeftUpLeg", -_Y, lkn - lhip)
+    R["LeftLeg"] = swing("LeftLeg", -_Y, lank - lkn)
+    R["RightUpLeg"] = swing("RightUpLeg", -_Y, rkn - rhip)
+    R["RightLeg"] = swing("RightLeg", -_Y, rank - rkn)
     # Leaves.
     for leaf in LEAVES:
         R[leaf] = np.eye(3)
 
-    return R, mid_hip
+    return R, mid_hip, new_swing
 
 
-def _decompose_zxy(R: np.ndarray) -> tuple[float, float, float]:
+def _decompose_zxy(R: np.ndarray, prev: tuple[float, float, float] | None = None
+                   ) -> tuple[float, float, float]:
     """
     Decompose rotation matrix R = Rz @ Rx @ Ry into (z, x, y) degrees,
     matching BVH channel order 'Zrotation Xrotation Yrotation'.
+
+    A ZXY decomposition of a given rotation is not unique: (z, x, y) and
+    (z+180, 180-x, y+180) represent the exact same rotation. Decomposing each
+    frame independently picks between these two branches arbitrarily, which
+    is fine for a single static pose but makes an *animated* BVH visibly
+    "flip" a joint 180 degrees between two consecutive frames whenever the
+    solver happens to land on different branches for each (bones are
+    correct at every individual frame, but the jump between frames reads as
+    a snap/flip during playback). When `prev` (the previous frame's angles
+    for this same joint) is given, we pick whichever branch is closer to it,
+    keeping the animation continuous.
     """
     sx = max(-1.0, min(1.0, R[2, 1]))
     x = math.asin(sx)
@@ -152,26 +204,78 @@ def _decompose_zxy(R: np.ndarray) -> tuple[float, float, float]:
     else:  # gimbal lock
         z = math.atan2(R[1, 0], R[0, 0])
         y = 0.0
-    return math.degrees(z), math.degrees(x), math.degrees(y)
+    z, x, y = math.degrees(z), math.degrees(x), math.degrees(y)
+
+    if prev is None:
+        return z, x, y
+
+    alt = (_wrap180(z + 180.0), 180.0 - x, _wrap180(y + 180.0))
+    primary = (z, x, y)
+
+    def dist(a):
+        return sum(_wrap180(a[i] - prev[i]) ** 2 for i in range(3))
+
+    return primary if dist(primary) <= dist(alt) else alt
 
 
-def _frame_channels(frame: list[dict], scale: float = 100.0) -> list[float]:
-    Rworld, mid_hip = _world_rotations(frame)
+def _wrap180(deg: float) -> float:
+    """Wrap an angle (degrees) into (-180, 180]."""
+    return (deg + 180.0) % 360.0 - 180.0
+
+
+def _frame_channels(
+    frame: list[dict],
+    scale: float = 100.0,
+    prev_angles: dict[str, tuple[float, float, float]] | None = None,
+    prev_swing: dict[str, tuple[np.ndarray, np.ndarray]] | None = None,
+) -> list[float] | tuple[list[float], dict[str, tuple[np.ndarray, np.ndarray]]]:
+    """
+    prev_angles: joint name -> (z, x, y) from the PREVIOUS frame, used to pick
+    the continuity-preserving branch of the ZXY decomposition (see
+    _decompose_zxy). Mutated in place with this frame's angles so the caller
+    can pass it straight into the next frame's call.
+    prev_swing: joint name -> (prev_target_dir, prev_world_R) from the
+    PREVIOUS frame, used by _continuous_swing to avoid the antipodal
+    instability in _rot_between (see _continuous_swing). When given, the
+    return value becomes (channels, new_swing) so the caller can thread it
+    into the next frame's call; when None, only channels is returned (used
+    by verify_fk.py's single-frame self-consistency check, which has no
+    notion of "previous frame").
+    """
+    Rworld, mid_hip, new_swing = _world_rotations(frame, prev_swing)
 
     channels: list[float] = []
     for joint in JOINT_ORDER:
-        parent = PARENT[joint]
-        if parent is None:
-            R_local = Rworld[joint]
+        if joint in LEAVES:
+            # MediaPipe gives us no hand/foot/head-twist orientation data, so
+            # leaves carry no local rotation. (Rworld[leaf] is a fixed world
+            # identity placeholder for the parent's decomposition elsewhere —
+            # localizing THAT against a moving parent would produce the
+            # parent's inverse, an erratic, gimbal-lock-prone value, not the
+            # zero this joint is meant to be.)
+            z, x, y = 0.0, 0.0, 0.0
+            if prev_angles is not None:
+                prev_angles[joint] = (z, x, y)
         else:
-            R_local = Rworld[parent].T @ Rworld[joint]
-        z, x, y = _decompose_zxy(R_local)
+            parent = PARENT[joint]
+            if parent is None:
+                R_local = Rworld[joint]
+            else:
+                R_local = Rworld[parent].T @ Rworld[joint]
+            prev = prev_angles.get(joint) if prev_angles is not None else None
+            z, x, y = _decompose_zxy(R_local, prev)
+            if prev_angles is not None:
+                prev_angles[joint] = (z, x, y)
 
         if joint == "Hips":
             pos = mid_hip * scale
             channels.extend([pos[0], pos[1], pos[2], z, x, y])
         else:
             channels.extend([z, x, y])
+
+    if prev_swing is None:
+        return channels
+    return channels, new_swing
 
     return channels
 
@@ -291,8 +395,11 @@ def bvh_string(smoothed_frames: list[list[dict]], fps: float) -> str:
 
     lines = [_HIERARCHY, "MOTION\n", f"Frames: {n_frames}\n",
              f"Frame Time: {frame_time:.6f}\n"]
+    prev_angles: dict[str, tuple[float, float, float]] = {}
+    prev_swing: dict[str, tuple[np.ndarray, np.ndarray]] = {}
     for frame in smoothed_frames:
-        ch = _frame_channels(frame)
+        ch, prev_swing = _frame_channels(
+            frame, prev_angles=prev_angles, prev_swing=prev_swing)
         lines.append(" ".join(f"{v:.4f}" for v in ch) + "\n")
     return "".join(lines)
 
