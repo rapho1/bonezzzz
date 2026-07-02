@@ -44,9 +44,17 @@ class SaveReq(BaseModel):
     format: str = "bvh"
 
 
+# Bumped on every engine change the add-on must not silently miss.
+# blender_addon/bonezzzz/engine_process.py keeps a matching constant and
+# replaces any running engine that reports a different (or no) version -
+# otherwise "Install from Disk" updates leave a stale engine process serving
+# old math, and new options are silently ignored.
+ENGINE_VERSION = "0.2.3"
+
+
 @app.get("/health")
 def health():
-    return {"ok": True}
+    return {"ok": True, "version": ENGINE_VERSION}
 
 
 @app.post("/run")

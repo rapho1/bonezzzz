@@ -7,6 +7,7 @@ back to the project's .venv for local development. No bpy.types classes here,
 so this module isn't registered like the others — __init__.py calls
 ensure_started()/stop() directly.
 """
+import json
 import os
 import subprocess
 import sys
@@ -19,6 +20,11 @@ import bpy
 HOST = "127.0.0.1"
 PORT = 8731
 HEALTH_URL = f"http://{HOST}:{PORT}/health"
+# Must match ENGINE_VERSION in engine/server.py (baked into the bundled exe).
+# A reachable engine reporting a different version is a leftover from an
+# older add-on install and gets replaced - otherwise updating the add-on
+# keeps serving old math and silently ignores new options.
+ENGINE_VERSION = "0.2.3"
 POLL_INTERVAL = 1.0
 # A freshly-installed/extracted exe can take a while to pass antivirus
 # scanning on its first launch from a new path - seen in practice taking
@@ -33,11 +39,45 @@ _poll_started_at = None
 
 
 def health_ok(timeout=1.0) -> bool:
+    return engine_version(timeout) is not None
+
+
+def engine_version(timeout=1.0) -> str | None:
+    """Version string of a reachable engine; "0" for pre-versioning engines;
+    None when nothing is listening."""
     try:
         with urllib.request.urlopen(HEALTH_URL, timeout=timeout) as r:
-            return r.status == 200
-    except (urllib.error.URLError, OSError):
-        return False
+            if r.status != 200:
+                return None
+            data = json.loads(r.read().decode("utf-8"))
+            return str(data.get("version", "0"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+
+
+def _kill_port_owner():
+    """Kill whatever process is listening on our port (Windows only) - used
+    to replace a stale engine left over from a previous add-on version."""
+    if sys.platform != "win32":
+        return
+    try:
+        out = subprocess.run(
+            ["netstat", "-ano"], capture_output=True, text=True,
+            creationflags=subprocess.CREATE_NO_WINDOW).stdout
+        pids = set()
+        for line in out.splitlines():
+            parts = line.split()
+            if (len(parts) >= 5 and parts[0] == "TCP"
+                    and parts[1].endswith(f":{PORT}")
+                    and parts[3] == "LISTENING"):
+                pids.add(parts[4])
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", pid],
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                capture_output=True)
+    except OSError:
+        pass
 
 
 def _bundled_exe_path():
@@ -78,12 +118,18 @@ def _poll():
 
 
 def ensure_started():
-    """Idempotent — does nothing if an engine is already reachable, ours or not."""
+    """Idempotent — reuses a reachable engine of the RIGHT version; replaces
+    a reachable engine of the wrong version (stale exe from an older add-on
+    install that would silently serve outdated math)."""
     global _proc, _poll_started_at
 
-    if health_ok():
+    ver = engine_version()
+    if ver == ENGINE_VERSION:
         STATE["status"] = "ready"
         return
+    if ver is not None:
+        _kill_port_owner()
+        _proc = None
 
     STATE["status"] = "starting"
     creationflags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
