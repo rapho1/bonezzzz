@@ -83,11 +83,14 @@ def run_smooth(params: dict, parents: list) -> dict:
     return res
 
 
-def run_output(_params: dict, parents: list) -> dict:
+def run_output(params: dict, parents: list) -> dict:
     src = parents[0]
     frames = src["frames"]
+    tpose = bool(params.get("tpose_start", False))
     # Prefer WHAM's direct SMPL-angle BVH; fall back to solving from landmarks.
-    txt = src.get("bvh") or bvh_string(frames, src["fps"])
+    # (tpose_start only applies to the landmark solver - WHAM's BVH arrives
+    # pre-baked from the WSL side.)
+    txt = src.get("bvh") or bvh_string(frames, src["fps"], tpose_start=tpose)
     return {"kind": "bvh", "fps": src["fps"], "bvh": txt, "frames": frames}
 
 

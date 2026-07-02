@@ -39,6 +39,8 @@ class VIEW3D_PT_bonezzzz(bpy.types.Panel):
         col = layout.column(align=True)
         col.prop(props, "cutoff")
         col.prop(props, "trim_edges")
+        if props.backend == 'mediapipe':
+            col.prop(props, "tpose_start")
 
         layout.separator()
         row = layout.row()

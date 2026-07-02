@@ -150,7 +150,10 @@ def make_bvh(track, offsets, dfs, fps):
     hierarchy, _ = build_hierarchy(offsets)
 
     lines = [hierarchy, "MOTION", f"Frames: {N}", f"Frame Time: {1.0 / fps:.6f}"]
-    prev_angles = {}  # joint index -> (z, x, y) from the previous frame
+    # Seed with zeros so frame 0 picks the Euler branch closest to the rest
+    # T-pose - keeps interpolation sane if the user keyframes a T-pose (all
+    # zeros) right before the baked animation for rigging/binding.
+    prev_angles = {j: (0.0, 0.0, 0.0) for j in range(24)}
     for i in range(N):
         vals = []
         # root translation (flip camera -> y-up) in cm

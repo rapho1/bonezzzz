@@ -26,7 +26,9 @@ def graph_from_props(props):
                 "cutoff": props.cutoff,
                 "trim_edges": props.trim_edges,
             }},
-            {"id": "o", "type": "output", "params": {}},
+            {"id": "o", "type": "output", "params": {
+                "tpose_start": props.tpose_start,
+            }},
         ],
         "edges": [
             {"source": "v", "target": "p"},
@@ -64,6 +66,13 @@ class BonezzzzProperties(bpy.types.PropertyGroup):
         name="Cutoff Frequency (Hz)", default=6.0, min=1.0, max=12.0)
     trim_edges: bpy.props.BoolProperty(
         name="Trim Undetected Edges", default=True)
+    tpose_start: bpy.props.BoolProperty(
+        name="T-Pose Start Frame",
+        description=(
+            "Prepend one frame with the skeleton in its rest T-pose "
+            "(zero rotations) - handy for binding/rigging a character "
+            "before the animation starts. MediaPipe backend only"),
+        default=False)
     export_format: bpy.props.EnumProperty(
         name="Format", items=[
             ('bvh', "BVH (.bvh)", ""),

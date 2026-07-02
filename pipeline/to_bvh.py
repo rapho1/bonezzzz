@@ -388,18 +388,44 @@ ROOT Hips
 """
 
 
-def bvh_string(smoothed_frames: list[list[dict]], fps: float) -> str:
-    """Return the full BVH file contents as a string."""
+def bvh_string(smoothed_frames: list[list[dict]], fps: float,
+               tpose_start: bool = False) -> str:
+    """
+    Return the full BVH file contents as a string.
+
+    tpose_start: prepend one frame with all rotations zeroed (the skeleton's
+    rest T-pose, held at the first frame's root position). Riggers bind the
+    character in a T-pose; providing it as a real baked frame means they
+    don't have to overwrite frame 1 by hand.
+    """
     frame_time = 1.0 / fps
-    n_frames = len(smoothed_frames)
+    n_frames = len(smoothed_frames) + (1 if tpose_start else 0)
 
     lines = [_HIERARCHY, "MOTION\n", f"Frames: {n_frames}\n",
              f"Frame Time: {frame_time:.6f}\n"]
-    prev_angles: dict[str, tuple[float, float, float]] = {}
+    # Seed the Euler-branch selection with zeros so the FIRST frame picks the
+    # representation numerically closest to the rest T-pose (0,0,0). Without
+    # this, frame 0 can legally come out as e.g. x=222 deg - the same physical
+    # rotation as x=-138, but if the user keyframes a T-pose (all zeros)
+    # right before it, Blender interpolates the raw channel value the long
+    # way around, which reads as a 180-degree bone flip on playback.
+    prev_angles: dict[str, tuple[float, float, float]] = {
+        j: (0.0, 0.0, 0.0) for j in JOINT_ORDER}
     prev_swing: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+    first = True
     for frame in smoothed_frames:
         ch, prev_swing = _frame_channels(
             frame, prev_angles=prev_angles, prev_swing=prev_swing)
+        if first and tpose_start:
+            # T-pose frame: same root position AND root rotation as frame 0
+            # (the actor usually isn't facing the rest orientation - zeroing
+            # the root would make the entire skeleton visibly swing around
+            # between the T-pose and frame 1), zero rotations everywhere else.
+            tpose = list(ch)
+            for i in range(6, len(tpose)):
+                tpose[i] = 0.0
+            lines.append(" ".join(f"{v:.4f}" for v in tpose) + "\n")
+        first = False
         lines.append(" ".join(f"{v:.4f}" for v in ch) + "\n")
     return "".join(lines)
 
