@@ -1,0 +1,3 @@
+# Shell scripts must keep LF line endings even on Windows checkouts,
+# otherwise bash chokes on the CRLF-mangled shebang line.
+*.sh text eol=lf

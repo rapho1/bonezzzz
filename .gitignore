@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# PyInstaller build artifacts (rebuild via build_sidecar.sh)
+build/
+dist/
+*.spec
+
+# Bundled engine exe (~220MB) - ships via GitHub Releases, not in git
+blender_addon/bonezzzz/bin/
+blender_addon/*.zip
+
+# Generated at runtime
+cache/
+output/
+
+# WHAM clone / large local test assets - not part of the repo
+third_party/
+test_videos/
+
+# Legacy Tauri/React app - retired, kept locally only
+app_legacy/
+
+# WSL config lives in the user profile, not the repo
+.wslconfig
+
+# Misc logs
+*.log
