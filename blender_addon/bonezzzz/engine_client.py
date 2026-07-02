@@ -38,3 +38,7 @@ def run(graph: dict, target: str, allow_heavy: bool) -> dict:
 def save(graph: dict, target: str, path: str, fmt: str) -> dict:
     return _post("/save", {"graph": graph, "target": target, "path": path, "format": fmt},
                 timeout=180)
+
+
+def clear_cache() -> dict:
+    return _post("/cache/clear", {}, timeout=30)

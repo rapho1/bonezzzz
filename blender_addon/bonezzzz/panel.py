@@ -43,9 +43,12 @@ class VIEW3D_PT_bonezzzz(bpy.types.Panel):
             col.prop(props, "tpose_start")
 
         layout.separator()
-        row = layout.row()
+        row = layout.row(align=True)
         row.enabled = not props.busy
         row.operator("bonezzzz.run_pose", text="Run Pose Estimation", icon='PLAY')
+        sub = row.row(align=True)
+        sub.enabled = not props.busy
+        sub.operator("bonezzzz.clear_cache", text="", icon='TRASH')
         layout.label(text=props.status_text)
 
         layout.separator()

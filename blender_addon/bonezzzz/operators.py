@@ -107,6 +107,26 @@ class BONEZZZZ_OT_run_pose(bpy.types.Operator):
                 area.tag_redraw()
 
 
+class BONEZZZZ_OT_clear_cache(bpy.types.Operator):
+    bl_idname = "bonezzzz.clear_cache"
+    bl_label = "Clear Cache"
+    bl_description = (
+        "Drop cached pose-estimation results (in-memory and on disk under "
+        "cache/). Use this if Run keeps producing an old animation after "
+        "changing the video or add-on settings")
+
+    def execute(self, context):
+        props = context.scene.bonezzzz
+        try:
+            res = engine_client.clear_cache()
+        except Exception as e:  # noqa: BLE001
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        props.has_result = False
+        props.status_text = f"Cache cleared ({res.get('disk_files_removed', 0)} file(s))."
+        return {'FINISHED'}
+
+
 class BONEZZZZ_OT_import_scene(bpy.types.Operator):
     bl_idname = "bonezzzz.import_scene"
     bl_label = "Import Into Scene"
@@ -206,6 +226,7 @@ class BONEZZZZ_OT_export(bpy.types.Operator):
 CLASSES = (
     BONEZZZZ_OT_pick_video,
     BONEZZZZ_OT_run_pose,
+    BONEZZZZ_OT_clear_cache,
     BONEZZZZ_OT_import_scene,
     BONEZZZZ_OT_export,
 )

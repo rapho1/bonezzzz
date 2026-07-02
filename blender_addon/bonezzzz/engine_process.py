@@ -24,7 +24,7 @@ HEALTH_URL = f"http://{HOST}:{PORT}/health"
 # A reachable engine reporting a different version is a leftover from an
 # older add-on install and gets replaced - otherwise updating the add-on
 # keeps serving old math and silently ignores new options.
-ENGINE_VERSION = "0.2.3"
+ENGINE_VERSION = "0.2.4"
 POLL_INTERVAL = 1.0
 # A freshly-installed/extracted exe can take a while to pass antivirus
 # scanning on its first launch from a new path - seen in practice taking

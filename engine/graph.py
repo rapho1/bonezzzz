@@ -85,6 +85,11 @@ class Engine:
             "result": self._summarize(target_result),
         }
 
+    def clear_cache(self) -> None:
+        """Drop the in-memory result cache (per-process; the heavy-node disk
+        cache under CACHE_DIR is cleared separately by the caller)."""
+        self._cache.clear()
+
     def get_result(self, graph: dict, target_id: str):
         """Re-resolve the cached result object for a node (no recompute)."""
         nodes = {n["id"]: n for n in graph["nodes"]}
