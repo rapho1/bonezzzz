@@ -38,10 +38,6 @@ _proc = None
 _poll_started_at = None
 
 
-def health_ok(timeout=1.0) -> bool:
-    return engine_version(timeout) is not None
-
-
 def engine_version(timeout=1.0) -> str | None:
     """Version string of a reachable engine; "0" for pre-versioning engines;
     None when nothing is listening."""
@@ -57,13 +53,20 @@ def engine_version(timeout=1.0) -> str | None:
 
 def _kill_port_owner():
     """Kill whatever process is listening on our port (Windows only) - used
-    to replace a stale engine left over from a previous add-on version."""
+    to replace a stale engine left over from a previous add-on version. Must
+    never raise: this runs from register() and from the polling timer, and
+    an uncaught exception here breaks add-on registration or gets swallowed
+    by Blender's timer dispatch, leaving the stale engine running unnoticed."""
     if sys.platform != "win32":
         return
     try:
+        # netstat's console output isn't guaranteed to be UTF-8 (e.g. non-US
+        # Windows locales use an OEM codepage) - decode leniently rather
+        # than raising, since we only need the ASCII columns (IP:port, PID).
         out = subprocess.run(
-            ["netstat", "-ano"], capture_output=True, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW).stdout
+            ["netstat", "-ano"], capture_output=True,
+            creationflags=subprocess.CREATE_NO_WINDOW
+        ).stdout.decode("utf-8", errors="replace")
         pids = set()
         for line in out.splitlines():
             parts = line.split()
@@ -76,7 +79,7 @@ def _kill_port_owner():
                 ["taskkill", "/F", "/T", "/PID", pid],
                 creationflags=subprocess.CREATE_NO_WINDOW,
                 capture_output=True)
-    except OSError:
+    except (OSError, UnicodeError):
         pass
 
 
@@ -106,12 +109,20 @@ def _redraw_view3d():
 
 
 def _poll():
-    if health_ok():
+    ver = engine_version()
+    if ver == ENGINE_VERSION:
         STATE["status"] = "ready"
         _redraw_view3d()
         return None  # stop the timer
+    if ver is not None:
+        # Something answers, but it's the WRONG version - the previous kill
+        # (from ensure_started()) hasn't taken effect yet (race/permissions/
+        # AV lag) or a second stale process is racing to rebind the port.
+        # Do NOT report "ready" against stale code - keep retrying the kill
+        # instead, bounded by the same overall timeout below.
+        _kill_port_owner()
     if time.monotonic() - _poll_started_at[0] > POLL_TIMEOUT:
-        STATE["status"] = "error: engine did not respond in time"
+        STATE["status"] = "error: engine did not respond with the expected version in time"
         _redraw_view3d()
         return None
     return POLL_INTERVAL
