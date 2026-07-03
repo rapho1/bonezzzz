@@ -417,12 +417,20 @@ def bvh_string(smoothed_frames: list[list[dict]], fps: float,
         ch, prev_swing = _frame_channels(
             frame, prev_angles=prev_angles, prev_swing=prev_swing)
         if first and tpose_start:
-            # T-pose frame: same root position AND root rotation as frame 0
-            # (the actor usually isn't facing the rest orientation - zeroing
-            # the root would make the entire skeleton visibly swing around
-            # between the T-pose and frame 1), zero rotations everywhere else.
+            # T-pose frame: fully neutral rest pose - ALL rotations zeroed,
+            # including the root. An earlier version kept the root rotation
+            # matching the actor's facing direction to avoid a jump into
+            # frame 2, but that meant the "T-pose" could face sideways or
+            # backward (whatever direction the actor faced in the source
+            # footage) - useless for binding, since riggers need a pose that
+            # actually looks like a neutral T-pose. Only root POSITION is
+            # kept (so the rig doesn't teleport); the pose-to-frame-2 jump is
+            # a single, instant, un-interpolated keyframe step (exactly what
+            # manually resetting frame 1 by hand already did) - not a
+            # multi-frame "spin", since BVH import bakes one keyframe per
+            # source frame with no in-betweens.
             tpose = list(ch)
-            for i in range(6, len(tpose)):
+            for i in range(3, len(tpose)):
                 tpose[i] = 0.0
             lines.append(" ".join(f"{v:.4f}" for v in tpose) + "\n")
         first = False

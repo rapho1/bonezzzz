@@ -1,7 +1,7 @@
 bl_info = {
     "name": "Bonezzzz",
     "author": "Bonezzzz",
-    "version": (0, 2, 5),
+    "version": (0, 2, 6),
     "blender": (4, 2, 0),
     "location": "View3D > Sidebar > Bonezzzz",
     "description": "Video to skeletal animation (MediaPipe / WHAM) directly inside Blender.",
